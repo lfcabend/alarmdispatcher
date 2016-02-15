@@ -11,17 +11,21 @@ import android.os.Message;
 import android.support.annotation.NonNull;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.widget.ArrayAdapter;
-import android.widget.ListAdapter;
 import android.widget.ListView;
 import android.widget.TextView;
 
+import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
 import java.util.List;
 
-public class AlarmDetector extends AppCompatActivity implements BluetoothHandler.DiscoveredDeviceCallBack {
+public class AlarmDetector extends AppCompatActivity
+        implements BluetoothHandler.DiscoveredDeviceCallBack, BluetoothHandler.ConnectionCallbackHandler {
+
+    public final static String TAG = AlarmDetector.class.getName();
 
     public static final String ALARM_ALERT_ACTION = "com.android.deskclock.ALARM_ALERT";
     public static final String ALARM_SNOOZE_ACTION = "com.android.deskclock.ALARM_SNOOZE";
@@ -29,9 +33,7 @@ public class AlarmDetector extends AppCompatActivity implements BluetoothHandler
     public static final String ALARM_DONE_ACTION = "com.android.deskclock.ALARM_DONE";
 
     private BluetoothHandler bluetoothHandler;
-    private BroadcastReceiver broadcastReceiver;
-    private Handler mHandler;
-    private List<String> devices = new ArrayList<>();
+    private List<String> messages = new ArrayList<>();
 
     private BroadcastReceiver mReceiver = new BroadcastReceiver() {
         @Override
@@ -64,42 +66,47 @@ public class AlarmDetector extends AppCompatActivity implements BluetoothHandler
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_alarm_detector);
+
         IntentFilter filter = new IntentFilter(ALARM_ALERT_ACTION);
         filter.addAction(ALARM_DISMISS_ACTION);
         filter.addAction(ALARM_SNOOZE_ACTION);
         filter.addAction(ALARM_DONE_ACTION);
         registerReceiver(mReceiver, filter);
 
-        mHandler = getHandler();
+        initializeList();
+        TextView statusField = (TextView) findViewById(R.id.textView4);
 
         bluetoothHandler = new BluetoothHandler();
         try {
             bluetoothHandler.initialize();
-            broadcastReceiver = bluetoothHandler.getBroadcastReceiver(this);
-            registerReceiver(broadcastReceiver, new IntentFilter(BluetoothDevice.ACTION_FOUND));
-            bluetoothHandler.startDiscovery();
-            populateList();
+
+            if (bluetoothHandler.getDeviceNames().contains(BluetoothHandler.DEVICE_NAME)) {
+                Log.d(TAG, "found clock");
+                statusField.setText("Clock found");
+                String address = bluetoothHandler.getAllDevices().get(BluetoothHandler.DEVICE_NAME);
+                bluetoothHandler.connect(address, this);
+            } else {
+                statusField.setText("Clock is not in range");
+            }
+
         } catch (BluetoothException e) {
             e.printStackTrace();
         }
     }
 
-    private void populateList() {
+    private void initializeList() {
         ListView list = (ListView) findViewById(R.id.listView);
-        devices.addAll(bluetoothHandler.getAllDevicesNames());
-        listAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_checked, devices);
+        listAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_checked, messages);
         list.setAdapter(listAdapter);
     }
 
-    @NonNull
-    private Handler getHandler() {
-        return new Handler(Looper.getMainLooper()) {
-            @Override
-            public void handleMessage(Message inputMessage) {
-                // Gets the image task from the incoming Message object.
-                listAdapter.notifyDataSetChanged();
-            }
-        };
+    private void updateStatus(String obj) {
+        TextView statusField = (TextView) findViewById(R.id.textView4);
+        statusField.setText(obj);
+    }
+
+    private void handleDiscoveredDevice(BluetoothDevice obj) {
+
     }
 
     @Override
@@ -113,7 +120,6 @@ public class AlarmDetector extends AppCompatActivity implements BluetoothHandler
     protected void onDestroy() {
         super.onDestroy();
         unregisterReceiver(mReceiver);
-        unregisterReceiver(broadcastReceiver);
     }
 
     @Override
@@ -133,10 +139,52 @@ public class AlarmDetector extends AppCompatActivity implements BluetoothHandler
 
     @Override
     public void deviceDiscovered(BluetoothDevice device) {
+    }
 
-        List<String> allDevicesNames = bluetoothHandler.getAllDevicesNames();
-        devices.clear();
-        devices.addAll(allDevicesNames);
-        mHandler.dispatchMessage(mHandler.obtainMessage());
+    @Override
+    public void connectionSuccessful() {
+        Log.d(TAG, "Going to dispatch successfull connection");
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                updateStatus("Connection successful");
+            }
+        });
+    }
+
+    @Override
+    public void connectionFailed(final BluetoothException e) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                updateStatus("Connection failed; " + e.getMessage());
+            }
+        });
+    }
+
+    @Override
+    public void messageRead(final String message) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                messages.add(message);
+                listAdapter.notifyDataSetChanged();
+            }
+        });
+    }
+
+    @Override
+    public void errorOccurred(final BluetoothException e) {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                updateStatus("error occurred; " + e.getMessage());
+            }
+        });
+    }
+
+    @Override
+    public void disconnected() {
+
     }
 }

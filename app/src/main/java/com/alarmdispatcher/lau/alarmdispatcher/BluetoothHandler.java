@@ -13,13 +13,18 @@ import android.util.Log;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.math.BigInteger;
+import java.nio.charset.Charset;
+import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Created by Lau on 2/8/2016.
@@ -28,7 +33,7 @@ public class BluetoothHandler {
 
     public static final UUID myUUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     public static String DEVICE_NAME = "HC-06";
-    public static String PIN = "HC-06";
+    public static String PIN = "1234";
 
     private static final String TAG = BluetoothHandler.class.getSimpleName();
 
@@ -36,9 +41,12 @@ public class BluetoothHandler {
     private Map<String, String> pairedDevices;
     private Map<String, String> discoveredDevices;
 
-    private BluetoothSocket bluetoothSocket;
+    private volatile BluetoothSocket bluetoothSocket;
+
+    private ExecutorService executorService;
 
     public BluetoothHandler() {
+        executorService = Executors.newFixedThreadPool(1);
     }
 
     public void startDiscovery() throws BluetoothException {
@@ -56,6 +64,19 @@ public class BluetoothHandler {
 
     }
 
+    public interface ConnectionCallbackHandler {
+
+        void connectionSuccessful();
+
+        void connectionFailed(BluetoothException e);
+
+        void messageRead(String message);
+
+        void errorOccurred(BluetoothException e);
+
+        void disconnected();
+
+    }
 
 
     public BroadcastReceiver getBroadcastReceiver(final DiscoveredDeviceCallBack discoveredDeviceCallBack) {
@@ -118,82 +139,43 @@ public class BluetoothHandler {
         return all;
     }
 
-    public BluetoothSocket connect(String address) throws BluetoothException {
-        try {
-            Log.d(TAG, "Connecting with address: " + address);
-            BluetoothDevice clockDevice = defaultAdapter.getRemoteDevice(address);//connects to the device's address and checks if it's available
-            Log.d(TAG, "Creating insecureRfcommSocketToServiceRecord: " + address);
-            BluetoothSocket bluetoothSocket = clockDevice.createInsecureRfcommSocketToServiceRecord(myUUID);
-            BluetoothAdapter.getDefaultAdapter().cancelDiscovery();
-            bluetoothSocket.connect();
-            Log.d(TAG, "Connected with address: " + address);
-            return bluetoothSocket;
-        } catch (IOException e) {
-            throw new BluetoothException("Could not connect; " + e.getMessage(), e);
-        } catch(IllegalArgumentException e) {
-            throw new BluetoothException("Address " + address + " is invalid" + e.getMessage(), e);
+    public void connect(final String address, final ConnectionCallbackHandler connectionCallbackHandler)
+            throws BluetoothException {
+        if (!isConnected()) {
+            executorService.submit(new AsyncConnector(address, connectionCallbackHandler));
+        } else {
+            throw new BluetoothException("isAlready connected");
         }
     }
 
     public boolean isConnected() {
-        boolean b = bluetoothSocket == null;
+        boolean b = bluetoothSocket != null;
         Log.d(TAG, "isConnected: " + b);
         return b;
     }
 
     public void writeMessage(String message) throws BluetoothException {
+        writeMessage((message + "\n\r").getBytes(Charset.forName("UTF-8")));
+    }
+
+    public void writeMessage(byte[] message) throws BluetoothException {
         if (isConnected()) {
             try {
-                Log.d(TAG, "Writing message: " + message);
-                bluetoothSocket.getOutputStream().write(message.getBytes());
+                Log.d(TAG, "Writing message: " + toHex(message));
+                bluetoothSocket.getOutputStream().write(message);
             } catch (IOException e) {
                 throw new BluetoothException("Error writing message", e);
             }
-        }
-    }
-
-    public String readString() throws BluetoothException {
-        if (isConnected()) {
-            ByteArrayOutputStream out = readByteArrayInternal();
-            String s = new String(out.toByteArray());
-            Log.d(TAG, "read message: " + s);
-            return s;
         } else {
             throw new BluetoothException("Not connected");
         }
     }
 
-    public byte[] readByteArray() throws BluetoothException {
-        if (isConnected()) {
-            ByteArrayOutputStream out = readByteArrayInternal();
-            byte[] bytes = out.toByteArray();
-            Log.d(TAG, "read bytes: " + toHex(bytes));
-            return bytes;
-        } else {
-            throw new BluetoothException("Not connected");
-        }
-    }
 
     private static String toHex(byte[] bytes) {
         return String.format("%040x", new BigInteger(1, bytes));
     }
 
-    @NonNull
-    private ByteArrayOutputStream readByteArrayInternal() throws BluetoothException {
-        try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            InputStream inputStream = bluetoothSocket.getInputStream();
-            int available = inputStream.available();
-            while (available > 0) {
-                byte[] buffer = new byte[1024];
-                int read = inputStream.read(buffer);
-                out.write(buffer, 0, read);
-            }
-            return out;
-        } catch (IOException e) {
-            throw new BluetoothException("Error writing message", e);
-        }
-    }
 
     private Map<String, String> getPairedDevicesList() {
         Map<String, String> pairedDevices = new HashMap<>();
@@ -216,6 +198,113 @@ public class BluetoothHandler {
                 bluetoothSocket = null;
             }
         }
+        if (executorService != null) {
+            executorService.shutdown();
+        }
     }
+
+    private class AsyncConnector implements Runnable {
+
+        public static final int LF = 10;
+        public static final int CR = 13;
+        private String address;
+        private ConnectionCallbackHandler connectionCallbackHandler;
+        private InputStream inputStream;
+        private ByteArrayOutputStream out = new ByteArrayOutputStream();
+        private boolean readLF = false;
+        private boolean readCR = false;
+
+        public AsyncConnector(String address, ConnectionCallbackHandler connectionCallbackHandler)
+                throws BluetoothException {
+
+            try {
+                this.address = address;
+                this.connectionCallbackHandler = connectionCallbackHandler;
+                Log.d(TAG, "Connecting with address: " + address);
+                BluetoothDevice clockDevice = defaultAdapter.getRemoteDevice(address);//connects to the device's address and checks if it's available
+                Log.d(TAG, "Creating insecureRfcommSocketToServiceRecord: " + address);
+                bluetoothSocket = clockDevice.createInsecureRfcommSocketToServiceRecord(myUUID);
+            } catch (IOException e) {
+                throw new BluetoothException("Could not create connection; " + e.getMessage(), e);
+            }
+        }
+
+        @Override
+        public void run() {
+            connect();
+            Log.d(TAG, "Going to read data");
+            readWhileConnected();
+            Log.d(TAG, "Connection handler thread is done");
+        }
+
+        private void readWhileConnected() {
+            byte[] buffer = new byte[1024];  // buffer store for the stream
+            int bytes; // bytes returned from read()
+
+            // Keep listening to the InputStream until an exception occurs
+            while (isConnected()) {
+                try {
+                    // Read from the InputStream
+                    readLine();
+                    if (readCR) {
+                        String message = new String(out.toByteArray(), Charset.forName("UTF-8"));
+                        Log.d(TAG, "read message: " + message);
+                        reset();
+                        connectionCallbackHandler.messageRead(message);
+                    }
+                } catch (IOException e) {
+                    connectionCallbackHandler.errorOccurred(
+                            new BluetoothException("Error while reading: " + e.getMessage(), e));
+                    close();
+                    connectionCallbackHandler.disconnected();
+                } catch (Exception e) {
+                    connectionCallbackHandler.errorOccurred(
+                            new BluetoothException("Error while reading: " + e.getMessage(), e));
+                    close();
+                    connectionCallbackHandler.disconnected();
+                }
+            }
+        }
+
+        private void reset() {
+            out.reset();
+            readCR = false;
+            readLF = false;
+        }
+
+
+        private void readLine() throws IOException {
+            Log.d(TAG, "Going to read a line");
+            int read = inputStream.read();
+            Log.d(TAG, "Read: " + read + "");
+            if (read == LF) {
+                Log.d(TAG, "read LF");
+                readLF = true;
+            } else if (read == CR) {
+                Log.d(TAG, "read CR");
+                readCR = true;
+            } else {
+                out.write(read);
+            }
+        }
+
+        private void connect() {
+            try {
+                BluetoothAdapter.getDefaultAdapter().cancelDiscovery();
+                Log.d(TAG, "Trying to connect to address: " + address);
+                bluetoothSocket.connect();
+                Log.d(TAG, "Connected with address: " + address);
+                inputStream = bluetoothSocket.getInputStream();
+                connectionCallbackHandler.connectionSuccessful();
+            } catch (IOException e) {
+                connectionCallbackHandler.
+                        connectionFailed(new BluetoothException("Could not connect; " + e.getMessage(), e));
+            } catch (IllegalArgumentException e) {
+                connectionCallbackHandler.
+                        connectionFailed(new BluetoothException("Address " + address + " is invalid" + e.getMessage(), e));
+            }
+        }
+    }
+
 
 }
