@@ -14,13 +14,27 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.Menu;
 import android.view.MenuItem;
+import android.view.View;
 import android.widget.ArrayAdapter;
 import android.widget.ListView;
+import android.widget.Spinner;
 import android.widget.TextView;
+
+import com.alarmdispatcher.lau.alarmdispatcher.commands.AlarmCommand;
+import com.alarmdispatcher.lau.alarmdispatcher.commands.SetTimeCommand;
+import com.alarmdispatcher.lau.alarmdispatcher.commands.SnoozeAlarmCommand;
+import com.alarmdispatcher.lau.alarmdispatcher.commands.SwitchHotness;
+import com.alarmdispatcher.lau.alarmdispatcher.commands.TurnOffAlarmCommand;
+import com.alarmdispatcher.lau.alarmdispatcher.commands.TurnOnAlarmCommand;
+import com.alarmdispatcher.lau.alarmdispatcher.commands.UpdateBackLight;
+import com.alarmdispatcher.lau.alarmdispatcher.commands.UpdateDataCommand;
 
 import java.io.UnsupportedEncodingException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class AlarmDetector extends AppCompatActivity
         implements BluetoothHandler.DiscoveredDeviceCallBack, BluetoothHandler.ConnectionCallbackHandler {
@@ -31,6 +45,20 @@ public class AlarmDetector extends AppCompatActivity
     public static final String ALARM_SNOOZE_ACTION = "com.android.deskclock.ALARM_SNOOZE";
     public static final String ALARM_DISMISS_ACTION = "com.android.deskclock.ALARM_DISMISS";
     public static final String ALARM_DONE_ACTION = "com.android.deskclock.ALARM_DONE";
+
+    private Map<String, Class<? extends AlarmCommand>> commands = new HashMap<String, Class<? extends AlarmCommand>>() {{
+        put(SetTimeCommand.INS, SetTimeCommand.class);
+        put(SnoozeAlarmCommand.INS, SnoozeAlarmCommand.class);
+        put(TurnOffAlarmCommand.INS, TurnOffAlarmCommand.class);
+        put(TurnOnAlarmCommand.INS, TurnOnAlarmCommand.class);
+        put(UpdateDataCommand.INS, UpdateDataCommand.class);
+        put(UpdateBackLight.INS, UpdateBackLight.class);
+    }};
+
+    private List<AlarmCommand> commands2Send = Arrays.asList(new SetTimeCommand(),
+            new SnoozeAlarmCommand(), new TurnOffAlarmCommand(), new TurnOnAlarmCommand(),
+            new SwitchHotness(true), new SwitchHotness(false),
+            new UpdateBackLight(true), new UpdateBackLight(false));
 
     private BluetoothHandler bluetoothHandler;
     private List<String> messages = new ArrayList<>();
@@ -75,7 +103,7 @@ public class AlarmDetector extends AppCompatActivity
 
         initializeList();
         TextView statusField = (TextView) findViewById(R.id.textView4);
-
+        initializeSpinner();
         bluetoothHandler = new BluetoothHandler();
         try {
             bluetoothHandler.initialize();
@@ -94,9 +122,34 @@ public class AlarmDetector extends AppCompatActivity
         }
     }
 
+    private void initializeSpinner() {
+        Spinner spinner = (Spinner) findViewById(R.id.spinner);
+        ArrayAdapter<AlarmCommand> adapter = new ArrayAdapter<AlarmCommand>(
+                this, android.R.layout.simple_list_item_1, commands2Send);
+
+
+        spinner.setAdapter(adapter);
+    }
+
+    public void sendCommand(View view) {
+        Spinner spinner = (Spinner) findViewById(R.id.spinner);
+        AlarmCommand selectedItem = (AlarmCommand) spinner.getSelectedItem();
+        Log.i(TAG, "Selected item: " + selectedItem);
+        if (bluetoothHandler.isConnected()) {
+            try {
+                bluetoothHandler.writeMessage(selectedItem.getMessage());
+            } catch (BluetoothException e) {
+                Log.e(TAG, "could not send messsage", e);
+                bluetoothHandler.close();
+                TextView statusField = (TextView) findViewById(R.id.textView4);
+                statusField.setText("Error during sending msg: " +  e.getMessage());
+            }
+        }
+    }
+
     private void initializeList() {
         ListView list = (ListView) findViewById(R.id.listView);
-        listAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_checked, messages);
+        listAdapter = new ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, messages);
         list.setAdapter(listAdapter);
     }
 
@@ -167,8 +220,14 @@ public class AlarmDetector extends AppCompatActivity
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                messages.add(message);
-                listAdapter.notifyDataSetChanged();
+                try {
+                    AlarmCommand alarmCommand = parseCommand(message);
+                    messages.add(alarmCommand.toString());
+                    listAdapter.notifyDataSetChanged();
+                } catch(Exception e) {
+                    Log.e(TAG, "Error during processing command", e);
+                    updateStatus("error during processing command: " + message + "; " + e.getMessage());
+                }
             }
         });
     }
@@ -187,4 +246,28 @@ public class AlarmDetector extends AppCompatActivity
     public void disconnected() {
 
     }
+
+    private AlarmCommand parseCommand(String message) {
+        if  (message.length() < 1) {
+            throw new IllegalArgumentException("Invalid length, needs at least 1 for instruction: " + message);
+        }
+
+        Class<? extends AlarmCommand> clazz = commands.get(String.valueOf(message.charAt(0)));
+        if  (clazz == null) {
+            throw new IllegalArgumentException("Unsupported instruction: " + message);
+        }
+
+        AlarmCommand alarmCommand;
+        try {
+            alarmCommand = clazz.newInstance();
+        } catch (InstantiationException e) {
+            throw new RuntimeException(e);
+        } catch (IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+
+        return alarmCommand.parseCommand(message);
+    }
+
+
 }

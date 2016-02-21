@@ -155,7 +155,7 @@ public class BluetoothHandler {
     }
 
     public void writeMessage(String message) throws BluetoothException {
-        writeMessage((message + "\n\r").getBytes(Charset.forName("UTF-8")));
+        writeMessage((message + "\n").getBytes(Charset.forName("UTF-8")));
     }
 
     public void writeMessage(byte[] message) throws BluetoothException {
@@ -163,6 +163,7 @@ public class BluetoothHandler {
             try {
                 Log.d(TAG, "Writing message: " + toHex(message));
                 bluetoothSocket.getOutputStream().write(message);
+                bluetoothSocket.getOutputStream().flush();
             } catch (IOException e) {
                 throw new BluetoothException("Error writing message", e);
             }
@@ -247,23 +248,28 @@ public class BluetoothHandler {
                     // Read from the InputStream
                     readLine();
                     if (readCR) {
-                        String message = new String(out.toByteArray(), Charset.forName("UTF-8"));
-                        Log.d(TAG, "read message: " + message);
-                        reset();
-                        connectionCallbackHandler.messageRead(message);
+                        handleMessageRead();
                     }
                 } catch (IOException e) {
-                    connectionCallbackHandler.errorOccurred(
-                            new BluetoothException("Error while reading: " + e.getMessage(), e));
-                    close();
-                    connectionCallbackHandler.disconnected();
+                    handleReadError(new BluetoothException("Error while reading: " + e.getMessage(), e));
                 } catch (Exception e) {
-                    connectionCallbackHandler.errorOccurred(
-                            new BluetoothException("Error while reading: " + e.getMessage(), e));
-                    close();
-                    connectionCallbackHandler.disconnected();
+                    handleReadError(new BluetoothException("Error while reading: " + e.getMessage(), e));
                 }
             }
+        }
+
+        private void handleMessageRead() {
+            String message = new String(out.toByteArray(), Charset.forName("UTF-8"));
+            Log.d(TAG, "read message: " + message);
+            reset();
+            connectionCallbackHandler.messageRead(message);
+        }
+
+        private void handleReadError(BluetoothException e2) {
+            Log.e(TAG, "Error while reading message: " + e2.getMessage(), e2);
+            close();
+            connectionCallbackHandler.errorOccurred(e2);
+            connectionCallbackHandler.disconnected();
         }
 
         private void reset() {
