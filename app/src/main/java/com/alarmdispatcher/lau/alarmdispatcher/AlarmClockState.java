@@ -10,6 +10,7 @@ public class AlarmClockState implements Serializable {
     private boolean ringing;
     private boolean snoozed;
     private boolean hot;
+    private boolean displayOn;
 
     public boolean isRinging() {
         return ringing;
@@ -33,5 +34,23 @@ public class AlarmClockState implements Serializable {
 
     public void setHot(boolean hot) {
         this.hot = hot;
+    }
+
+    public boolean isDisplayOn() {
+        return displayOn;
+    }
+
+    public void setDisplayOn(boolean displayOn) {
+        this.displayOn = displayOn;
+    }
+
+    @Override
+    public String toString() {
+        return "AlarmClockState{" +
+                "ringing=" + ringing +
+                ", snoozed=" + snoozed +
+                ", hot=" + hot +
+                ", displayOn=" + displayOn +
+                '}';
     }
 }
