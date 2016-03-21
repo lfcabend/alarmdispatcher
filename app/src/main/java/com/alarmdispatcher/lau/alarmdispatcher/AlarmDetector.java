@@ -2,11 +2,14 @@ package com.alarmdispatcher.lau.alarmdispatcher;
 
 import android.bluetooth.BluetoothDevice;
 import android.content.BroadcastReceiver;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
 import android.os.Message;
 import android.support.annotation.NonNull;
@@ -20,8 +23,10 @@ import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.ListView;
 import android.widget.Spinner;
+import android.widget.Switch;
 import android.widget.TextView;
 
+import com.alarmdispatcher.lau.alarmdispatcher.AlarmBluetoothService.OnChangeHandler;
 import com.alarmdispatcher.lau.alarmdispatcher.commands.AlarmCommand;
 import com.alarmdispatcher.lau.alarmdispatcher.commands.SetTimeCommand;
 import com.alarmdispatcher.lau.alarmdispatcher.commands.SnoozeAlarmCommand;
@@ -39,93 +44,67 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-public class AlarmDetector extends AppCompatActivity
-        implements BluetoothHandler.DiscoveredDeviceCallBack, BluetoothHandler.ConnectionCallbackHandler {
+import static com.alarmdispatcher.lau.alarmdispatcher.Constants.*;
+
+public class AlarmDetector extends AppCompatActivity implements OnChangeHandler {
 
     public final static String TAG = AlarmDetector.class.getName();
 
-    public static final String ALARM_ALERT_ACTION = "com.android.deskclock.ALARM_ALERT";
-    public static final String ALARM_SNOOZE_ACTION = "com.android.deskclock.ALARM_SNOOZE";
-    public static final String ALARM_DISMISS_ACTION = "com.android.deskclock.ALARM_DISMISS";
-    public static final String ALARM_DONE_ACTION = "com.android.deskclock.ALARM_DONE";
+    private AlarmBluetoothService bluetoothService;
+    private boolean mBound = false;
 
-    public static final String PREFS_NAME = "storage";
-    public static final String ALARM_STATE = "ALARM_STATE";
-
-    private Map<String, Class<? extends AlarmCommand>> commands = new HashMap<String, Class<? extends AlarmCommand>>() {{
-        put(SetTimeCommand.INS, SetTimeCommand.class);
-        put(SnoozeAlarmCommand.INS, SnoozeAlarmCommand.class);
-        put(TurnOffAlarmCommand.INS, TurnOffAlarmCommand.class);
-        put(TurnOnAlarmCommand.INS, TurnOnAlarmCommand.class);
-        put(UpdateDataCommand.INS, UpdateDataCommand.class);
-        put(UpdateBackLight.INS, UpdateBackLight.class);
-    }};
 
     private List<AlarmCommand> commands2Send = Arrays.asList(new SetTimeCommand(),
             new SnoozeAlarmCommand(), new TurnOffAlarmCommand(), new TurnOnAlarmCommand(),
             new SwitchHotness(true), new SwitchHotness(false),
             new UpdateBackLight(true), new UpdateBackLight(false));
 
-    private BluetoothHandler bluetoothHandler;
-
-    private BroadcastReceiver mReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            System.out.println("intent: " + intent);
-            String action = intent.getAction();
-            String alarmState = null;
-            if (action.equals(ALARM_ALERT_ACTION)) {
-                alarmState = "Ringing";
-            } else if (action.equals(ALARM_DISMISS_ACTION)) {
-                alarmState = "Dismissed";
-            } else if (action.equals(ALARM_SNOOZE_ACTION)) {
-                alarmState = "Snoozed";
-            } else if (action.equals(ALARM_DONE_ACTION)) {
-                alarmState = "Done";
-            }
-            if (alarmState != null) {
-                UpdateAlarmStateText(alarmState);
-            }
-        }
-    };
-
-    private void UpdateAlarmStateText(String alarmState) {
-        TextView view = (TextView) findViewById(R.id.textView2);
-        view.setText(alarmState);
-    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_alarm_detector);
 
-        IntentFilter filter = new IntentFilter(ALARM_ALERT_ACTION);
-        filter.addAction(ALARM_DISMISS_ACTION);
-        filter.addAction(ALARM_SNOOZE_ACTION);
-        filter.addAction(ALARM_DONE_ACTION);
-        registerReceiver(mReceiver, filter);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
 
         initializeState();
-
-        TextView statusField = (TextView) findViewById(R.id.textView4);
         initializeSpinner();
-        bluetoothHandler = new BluetoothHandler();
-        try {
-            bluetoothHandler.initialize();
 
-            if (bluetoothHandler.getDeviceNames().contains(BluetoothHandler.DEVICE_NAME)) {
-                Log.d(TAG, "found clock");
-                statusField.setText("Clock found");
-                String address = bluetoothHandler.getAllDevices().get(BluetoothHandler.DEVICE_NAME);
-                bluetoothHandler.connect(address, this);
-            } else {
-                statusField.setText("Clock is not in range");
-            }
 
-        } catch (BluetoothException e) {
-            e.printStackTrace();
-        }
+        Intent intent = new Intent(this, AlarmBluetoothService.class);
+        startService(intent);
+
+        bindService(intent, mConnection, Context.BIND_AUTO_CREATE);
+
     }
+
+    /**
+     * Defines callbacks for service binding, passed to bindService()
+     */
+    private ServiceConnection mConnection = new ServiceConnection() {
+
+        @Override
+        public void onServiceConnected(ComponentName className,
+                                       IBinder service) {
+            // We've bound to LocalService, cast the IBinder and get LocalService instance
+            AlarmBluetoothService.LocalBinder binder = (AlarmBluetoothService.LocalBinder) service;
+            bluetoothService = binder.getService();
+            mBound = true;
+            bluetoothService.addOnChangeHandler(AlarmDetector.this);
+            bluetoothService.updateBlueToothState(null);
+            initializeState();
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName arg0) {
+            mBound = false;
+            bluetoothService.removeOnChangeHandler(AlarmDetector.this);
+        }
+    };
 
     private void initializeState() {
         SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
@@ -146,6 +125,30 @@ public class AlarmDetector extends AppCompatActivity
         displayOnCheckBox.setChecked(alarmClockState.isDisplayOn());
         CheckBox snoozedCheckBox = (CheckBox) findViewById(R.id.snoozedCheckBox);
         snoozedCheckBox.setChecked(alarmClockState.isSnoozed());
+
+        BluetoothConnectionState bluetoothConnectionState;
+        if (settings.contains(Constants.CONNECTION_STATE)) {
+            String jsonString = settings.getString(Constants.CONNECTION_STATE, null);
+            Gson gson = new Gson();
+            bluetoothConnectionState = gson.fromJson(jsonString, BluetoothConnectionState.class);
+        } else {
+            bluetoothConnectionState = new BluetoothConnectionState();
+        }
+
+        CheckBox bluetoothAvailableCheckbox = (CheckBox) findViewById(R.id.bluetoothAvailableCheckBox);
+        bluetoothAvailableCheckbox.setChecked(bluetoothConnectionState.isBluetoothAvailable());
+        CheckBox bluetoothOnCheckbox = (CheckBox) findViewById(R.id.bluetoothOnCheckBox);
+        bluetoothOnCheckbox.setChecked(bluetoothConnectionState.isBluetoothOn());
+        CheckBox alarmPresentCheckbox = (CheckBox) findViewById(R.id.alarmPresentCheckBox);
+        alarmPresentCheckbox.setChecked(bluetoothConnectionState.isAlarmClockPresent());
+        CheckBox connectedCheckbox = (CheckBox) findViewById(R.id.connectedCheckBox);
+        connectedCheckbox.setChecked(bluetoothConnectionState.isConnected());
+        CheckBox heartBeatCheckBox = (CheckBox) findViewById(R.id.heartBeatCheckBox);
+        heartBeatCheckBox.setChecked(bluetoothConnectionState.isAlive());
+
+        Switch switchButton = (Switch) findViewById(R.id.switch1);
+        switchButton.setChecked(alarmClockState.isHot());
+
     }
 
     private void initializeSpinner() {
@@ -161,26 +164,28 @@ public class AlarmDetector extends AppCompatActivity
         Spinner spinner = (Spinner) findViewById(R.id.spinner);
         AlarmCommand selectedItem = (AlarmCommand) spinner.getSelectedItem();
         Log.i(TAG, "Selected item: " + selectedItem);
-        if (bluetoothHandler.isConnected()) {
-            try {
-                bluetoothHandler.writeMessage(selectedItem.getMessage());
-            } catch (BluetoothException e) {
-                Log.e(TAG, "could not send messsage", e);
-                bluetoothHandler.close();
-                TextView statusField = (TextView) findViewById(R.id.textView4);
-                statusField.setText("Error during sending msg: " + e.getMessage());
-            }
-        }
+
+        bluetoothService.sendCommand(selectedItem);
     }
 
+    public void alarmSwitchClicked(View view) {
+        Switch switchButton = (Switch) findViewById(R.id.switch1);
 
-    private void updateStatus(String obj) {
-        TextView statusField = (TextView) findViewById(R.id.textView4);
-        statusField.setText(obj);
+        boolean enabled = switchButton.isChecked();
+
+
+        Log.i(TAG, "Switched alarm " + (enabled ? "on" : "off"));
+        AlarmCommand alarmCommand = new SwitchHotness(enabled);
+
+        storeAlarmSwitch(enabled);
+
+        bluetoothService.sendCommand(alarmCommand);
+
     }
 
-    private void handleDiscoveredDevice(BluetoothDevice obj) {
-
+    private void storeAlarmSwitch(boolean enabled) {
+        SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
+        settings.edit().putBoolean(SWITCH_STATE, enabled);
     }
 
     @Override
@@ -193,7 +198,16 @@ public class AlarmDetector extends AppCompatActivity
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        unregisterReceiver(mReceiver);
+
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (mBound) {
+            unbindService(mConnection);
+            mBound = false;
+        }
     }
 
     @Override
@@ -212,94 +226,13 @@ public class AlarmDetector extends AppCompatActivity
     }
 
     @Override
-    public void deviceDiscovered(BluetoothDevice device) {
-    }
-
-    @Override
-    public void connectionSuccessful() {
-        Log.d(TAG, "Going to dispatch successfull connection");
+    public void onChange() {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                updateStatus("Connection successful");
+
+                initializeState();
             }
         });
     }
-
-    @Override
-    public void connectionFailed(final BluetoothException e) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                updateStatus("Connection failed; " + e.getMessage());
-            }
-        });
-    }
-
-    @Override
-    public void messageRead(final String message) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    AlarmCommand alarmCommand = parseCommand(message);
-                    if (UpdateDataCommand.INS.equals(alarmCommand.getInstruction())) {
-                        UpdateDataCommand updateDataCommand = (UpdateDataCommand) alarmCommand;
-                        AlarmClockState alarmClockState = updateDataCommand.getAlarmClockState();
-                        SharedPreferences settings = getSharedPreferences(PREFS_NAME, 0);
-                        SharedPreferences.Editor edit = settings.edit();
-                        Gson gson = new Gson();
-                        String alarmStateJSON = gson.toJson(alarmClockState);
-                        edit.putString(ALARM_STATE, alarmStateJSON);
-                        edit.commit();
-                        Log.d(TAG, "Updated alarm state");
-
-                        initializeState();
-                    }
-                } catch (Exception e) {
-                    Log.e(TAG, "Error during processing command", e);
-                    updateStatus("error during processing command: " + message + "; " + e.getMessage());
-                }
-            }
-        });
-    }
-
-    @Override
-    public void errorOccurred(final BluetoothException e) {
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                updateStatus("error occurred; " + e.getMessage());
-            }
-        });
-    }
-
-    @Override
-    public void disconnected() {
-
-    }
-
-    private AlarmCommand parseCommand(String message) {
-        if (message.length() < 1) {
-            throw new IllegalArgumentException("Invalid length, needs at least 1 for instruction: " + message);
-        }
-
-        Class<? extends AlarmCommand> clazz = commands.get(String.valueOf(message.charAt(0)));
-        if (clazz == null) {
-            throw new IllegalArgumentException("Unsupported instruction: " + message);
-        }
-
-        AlarmCommand alarmCommand;
-        try {
-            alarmCommand = clazz.newInstance();
-        } catch (InstantiationException e) {
-            throw new RuntimeException(e);
-        } catch (IllegalAccessException e) {
-            throw new RuntimeException(e);
-        }
-
-        return alarmCommand.parseCommand(message);
-    }
-
-
 }

@@ -1,25 +1,53 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.alarmdispatcher.lau.alarmdispatcher" >
+    package="com.alarmdispatcher.lau.alarmdispatcher">
 
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:theme="@style/AppTheme" >
-
-        <uses-permission android:name="android.permission.BLUETOOTH" />
-        <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+        android:theme="@style/AppTheme">
 
         <activity
             android:name=".AlarmDetector"
-            android:label="@string/app_name" >
+            android:label="@string/app_name">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <service android:name=".AlarmBluetoothService"></service>
+
+        <receiver
+            android:name=".AlarmReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.android.deskclock.ALARM_ALERT" />
+                <action android:name="com.android.deskclock.ALARM_SNOOZE" />
+                <action android:name="com.android.deskclock.ALARM_DISMISS" />
+                <action android:name="com.android.deskclock.ALARM_DONE" />
+                <action android:name="com.samsung.sec.android.clockpackage.alarm.ALARM_ALERT" />
+            </intent-filter>
+        </receiver>
+
+        <uses-permission android:name="android.permission.WAKE_LOCK" />
+        <uses-permission android:name="android.permission.BLUETOOTH" />
+        <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+        <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+
     </application>
 
 </manifest>

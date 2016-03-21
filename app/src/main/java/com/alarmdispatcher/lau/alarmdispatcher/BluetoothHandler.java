@@ -42,6 +42,7 @@ public class BluetoothHandler {
     private Map<String, String> discoveredDevices;
 
     private volatile BluetoothSocket bluetoothSocket;
+    private volatile boolean connected;
 
     private ExecutorService executorService;
 
@@ -102,13 +103,34 @@ public class BluetoothHandler {
     public void initialize() throws BluetoothException {
         Log.d(TAG, "initializing bluetooth");
         defaultAdapter = BluetoothAdapter.getDefaultAdapter();
-        if (defaultAdapter == null) {
+        if (!isBluetoothAvailable()) {
             throw new BluetoothException("No bluetooth available");
-        } else if (!defaultAdapter.isEnabled()) {
+        } else if (!isBluetoothOn()) {
             throw new BluetoothException("Turn on bluetooth");
         }
         Log.d(TAG, "Received bluetooth adapter");
+        refreshPairedDevicesList();
+    }
+
+    public boolean containsPairedDevice(String name) {
+        if (pairedDevices != null) {
+            return pairedDevices.containsKey(name);
+        } else {
+            return false;
+        }
+    }
+
+    public void refreshPairedDevicesList() {
         this.pairedDevices = getPairedDevicesList();
+    }
+
+    public static boolean isBluetoothAvailable() {
+        return BluetoothAdapter.getDefaultAdapter() != null;
+    }
+
+    public static boolean isBluetoothOn() {
+        return BluetoothAdapter.getDefaultAdapter() != null &&
+                BluetoothAdapter.getDefaultAdapter().isEnabled();
     }
 
     public List<String> getDeviceNames() {
@@ -149,9 +171,7 @@ public class BluetoothHandler {
     }
 
     public boolean isConnected() {
-        boolean b = bluetoothSocket != null;
-        Log.d(TAG, "isConnected: " + b);
-        return b;
+        return connected;
     }
 
     public void writeMessage(String message) throws BluetoothException {
@@ -191,6 +211,7 @@ public class BluetoothHandler {
 
     public void close() {
         Log.d(TAG, "closing handler");
+        connected = false;
         if (bluetoothSocket != null) {
             try {
                 bluetoothSocket.close();
@@ -210,7 +231,7 @@ public class BluetoothHandler {
         public static final int CR = 13;
         private String address;
         private ConnectionCallbackHandler connectionCallbackHandler;
-        private InputStream inputStream;
+        private volatile InputStream inputStream;
         private ByteArrayOutputStream out = new ByteArrayOutputStream();
         private boolean readLF = false;
         private boolean readCR = false;
@@ -299,6 +320,7 @@ public class BluetoothHandler {
                 BluetoothAdapter.getDefaultAdapter().cancelDiscovery();
                 Log.d(TAG, "Trying to connect to address: " + address);
                 bluetoothSocket.connect();
+                connected = true;
                 Log.d(TAG, "Connected with address: " + address);
                 inputStream = bluetoothSocket.getInputStream();
                 connectionCallbackHandler.connectionSuccessful();
